@@ -1,0 +1,188 @@
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import plotly.express as px
+import numpy as np
+
+# Filter data
+dolya_df = df_long[(df_long['Type'] == 'Доля,%') & (df_long['Branch'] != 'Все')]
+kp_df = df_long[(df_long['Type'] == 'КП') & (df_long['Branch'] != 'Все')]
+
+# Get unique branches
+branches = kp_df['Branch'].unique()
+
+# Calculate grid dimensions (2 columns)
+n_branches = len(branches)
+n_cols = 2
+n_rows = (n_branches + 1) // 2
+
+# Create beautiful color palette
+colors_kp = ['#2E86AB', '#A23B72', '#F18F01', '#C73E1D', '#8B5A3C', '#4A6741', '#7209B7', '#F72585']
+colors_dolya = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7', '#DDA0DD', '#98D8C8', '#F7DC6F']
+
+# Extend colors if needed
+while len(colors_kp) < n_branches:
+    colors_kp.extend(colors_kp)
+    colors_dolya.extend(colors_dolya)
+
+# Create subplots with enhanced layout
+fig = make_subplots(
+    rows=n_rows,
+    cols=n_cols,
+    subplot_titles=[f"<b style='font-size:16px; color:#2C3E50'>{branch}</b>" for branch in branches],
+    vertical_spacing=0.12,
+    horizontal_spacing=0.08,
+    specs=[[{"secondary_y": True} for _ in range(n_cols)] for _ in range(n_rows)],
+    x_title="<b style='font-size:14px'>Период</b>",
+)
+
+# Add traces for each branch
+for idx, branch in enumerate(branches):
+    # Calculate row and column
+    row = (idx // n_cols) + 1
+    col = (idx % n_cols) + 1
+    
+    # Filter data for the current branch
+    kp_branch = kp_df[kp_df['Branch'] == branch].sort_values('Date')
+    dolya_branch = dolya_df[dolya_df['Branch'] == branch].sort_values('Date')
+    
+    # Add enhanced bar trace for КП (left y-axis)
+    fig.add_trace(
+        go.Bar(
+            x=kp_branch['Date'],
+            y=kp_branch['Value'],
+            name='КП' if idx == 0 else None,  # Only show legend for first trace
+            text=[f'{val:.1f}' for val in kp_branch['Value']],
+            textposition='outside',
+            textfont=dict(size=11, color='#2C3E50', family="Arial Black"),
+            hovertemplate='<b>Дата:</b> %{x}<br><b>КП:</b> %{y:.2f}<extra></extra>',
+            marker=dict(
+                color=colors_kp[idx],
+                opacity=0.8,
+                line=dict(color='white', width=2),
+            ),
+            showlegend=True if idx == 0 else False,
+            legendgroup="kp"
+        ),
+        row=row,
+        col=col,
+        secondary_y=False,
+    )
+    
+    # Add enhanced line trace for Доля,% (right y-axis)
+    fig.add_trace(
+        go.Scatter(
+            x=dolya_branch['Date'],
+            y=dolya_branch['Value'],
+            name='Доля, %' if idx == 0 else None,  # Only show legend for first trace
+            mode='lines+markers+text',
+            text=[f'{val:.3f}%' for val in dolya_branch['Value']],
+            textposition='top center',
+            textfont=dict(size=10, color='#E74C3C', family="Arial"),
+            hovertemplate='<b>Дата:</b> %{x}<br><b>Доля:</b> %{y:.4f}%<extra></extra>',
+            line=dict(
+                color=colors_dolya[idx],
+                width=4,
+                shape='spline',  # Smooth curves
+                smoothing=0.3
+            ),
+            marker=dict(
+                size=10,
+                color='white',
+                line=dict(color=colors_dolya[idx], width=3),
+                symbol='circle'
+            ),
+            showlegend=True if idx == 0 else False,
+            legendgroup="dolya"
+        ),
+        row=row,
+        col=col,
+        secondary_y=True,
+    )
+
+# Update layout with stunning design
+fig.update_layout(
+    title={
+        'text': "<b style='font-size:24px; color:#2C3E50'>📊 Анализ КП и Доли по Отраслям</b><br>" +
+                "<span style='font-size:16px; color:#7F8C8D'>Комплексная аналитика показателей эффективности</span>",
+        'x': 0.5,
+        'xanchor': 'center',
+        'font': {'family': 'Arial', 'size': 20}
+    },
+    height=400 * n_rows,
+    width=1400,
+    showlegend=True,
+    legend=dict(
+        orientation="h",
+        yanchor="bottom",
+        y=1.02,
+        xanchor="right",
+        x=1,
+        font=dict(size=14, color='#2C3E50', family='Arial'),
+        bgcolor="rgba(255,255,255,0.8)",
+        bordercolor="rgba(0,0,0,0.2)",
+        borderwidth=1
+    ),
+    hovermode='x unified',
+    plot_bgcolor='rgba(248,249,250,0.8)',
+    paper_bgcolor='white',
+    margin=dict(l=80, r=80, b=80, t=120, pad=10),
+    font=dict(family="Arial", size=12, color='#2C3E50'),
+)
+
+# Update y-axis styling for each subplot
+for i in range(1, n_rows + 1):
+    for j in range(1, n_cols + 1):
+        # Left y-axis (КП)
+        fig.update_yaxes(
+            title_text='<b style="color:#2E86AB">КП</b>',
+            title_font=dict(size=13, color='#2E86AB', family='Arial'),
+            tickfont=dict(size=11, color='#2C3E50'),
+            gridcolor='rgba(46,134,171,0.2)',
+            gridwidth=1,
+            zeroline=True,
+            zerolinecolor='rgba(0,0,0,0.3)',
+            zerolinewidth=2,
+            row=i,
+            col=j,
+            secondary_y=False,
+            showgrid=True
+        )
+        
+        # Right y-axis (Доля,%)
+        fig.update_yaxes(
+            title_text='<b style="color:#E74C3C">Доля, %</b>',
+            title_font=dict(size=13, color='#E74C3C', family='Arial'),
+            tickfont=dict(size=11, color='#2C3E50'),
+            gridcolor='rgba(231,76,60,0.1)',
+            overlaying='y',
+            side='right',
+            row=i,
+            col=j,
+            secondary_y=True,
+            showgrid=False
+        )
+
+# Update x-axis styling
+fig.update_xaxes(
+    tickfont=dict(size=11, color='#2C3E50'),
+    gridcolor='rgba(0,0,0,0.1)',
+    gridwidth=1,
+    linecolor='rgba(0,0,0,0.3)',
+    linewidth=2,
+    mirror=True
+)
+
+# Add subtle animation effect
+fig.update_traces(
+    selector=dict(type='bar'),
+    marker_line_width=2,
+    marker_line_color='white'
+)
+
+fig.update_traces(
+    selector=dict(type='scatter'),
+    line_shape='spline'
+)
+
+# Show the stunning chart
+fig.show()
