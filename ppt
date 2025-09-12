@@ -1,0 +1,88 @@
+from pptx import Presentation
+from pptx.enum.shapes import MSO_SHAPE_TYPE
+from pptx.util import Inches, Pt
+import tempfile
+import os
+
+def clone_presentation(input_path, output_path):
+    src = Presentation(input_path)
+    # Create a new presentation (uses default template)
+    dst = Presentation()
+
+    # Remove default first slide if you prefer to start clean
+    while len(dst.slides) > 0:
+        r = dst.slides._sldIdLst[0]
+        del dst.slides._sldIdLst[0]
+
+    for i, slide in enumerate(src.slides):
+        # create blank slide layout (index 6 typically blank) or use dst.slide_layouts[6] if available
+        blank_layout = dst.slide_layouts[6] if len(dst.slide_layouts) > 6 else dst.slide_layouts[0]
+        new_slide = dst.slides.add_slide(blank_layout)
+
+        for shape in slide.shapes:
+            # Copy text frames
+            if shape.has_text_frame:
+                # create a textbox on destination and copy text and basic formatting
+                left = shape.left
+                top = shape.top
+                width = shape.width
+                height = shape.height
+                tx_box = new_slide.shapes.add_textbox(left, top, width, height)
+                dst_tf = tx_box.text_frame
+                dst_tf.clear()
+                for p in shape.text_frame.paragraphs:
+                    new_p = dst_tf.add_paragraph()
+                    new_p.text = p.text
+                    # copy some basic properties (font size)
+                    if p.runs and p.runs[0].font.size:
+                        new_p.font.size = p.runs[0].font.size
+                    # preserve bullet if present
+                    new_p.level = p.level
+
+            # Copy pictures
+            elif shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
+                # shape.image.blob returns binary image bytes
+                img_bytes = shape.image.blob
+                # save to temp file
+                ext = shape.image.ext
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.' + ext) as tmp:
+                    tmp.write(img_bytes)
+                    tmp_path = tmp.name
+                new_slide.shapes.add_picture(tmp_path, shape.left, shape.top, width=shape.width, height=shape.height)
+                os.unlink(tmp_path)
+
+            # Copy tables (basic)
+            elif shape.has_table:
+                tbl = shape.table
+                rows = len(tbl.rows)
+                cols = len(tbl.columns)
+                # create table in new slide with same position/size
+                table_shape = new_slide.shapes.add_table(rows, cols, shape.left, shape.top, shape.width, shape.height)
+                new_tbl = table_shape.table
+                for r in range(rows):
+                    for c in range(cols):
+                        cell = tbl.cell(r, c)
+                        new_tbl.cell(r, c).text = cell.text_frame.text
+
+            # other shapes (auto-shapes) -> optionally copy text if any
+            elif shape.shape_type == MSO_SHAPE_TYPE.AUTO_SHAPE and shape.has_text_frame:
+                left = shape.left
+                top = shape.top
+                width = shape.width
+                height = shape.height
+                tx_box = new_slide.shapes.add_textbox(left, top, width, height)
+                tx_box.text_frame.text = shape.text
+
+            # else: ignore complex shapes (charts, SmartArt) for now
+
+    # save new presentation
+    dst.save(output_path)
+    print("Saved cloned presentation to:", output_path)
+
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) < 3:
+        print("Usage: python clone_pptx.py input.pptx output.pptx")
+        sys.exit(1)
+    clone_presentation(sys.argv[1], sys.argv[2])
