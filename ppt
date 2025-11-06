@@ -1,88 +1,173 @@
-from pptx import Presentation
-from pptx.enum.shapes import MSO_SHAPE_TYPE
-from pptx.util import Inches, Pt
-import tempfile
-import os
+import pandas as pd
+import numpy as np
 
-def clone_presentation(input_path, output_path):
-    src = Presentation(input_path)
-    # Create a new presentation (uses default template)
-    dst = Presentation()
+# List of all dataframes with their period labels
+all_df = [
+    df_2401, df_2501, df_2402, df_2502, df_2403, df_2503,
+    df_2404, df_2504, df_2405, df_2505, df_2406, df_2506,
+    df_2407, df_2507, df_2408, df_2508, df_2409, df_2509,
+    df_2410, df_2510, df_2411, df_2412
+]
 
-    # Remove default first slide if you prefer to start clean
-    while len(dst.slides) > 0:
-        r = dst.slides._sldIdLst[0]
-        del dst.slides._sldIdLst[0]
+periods = [
+    '2401', '2501', '2402', '2502', '2403', '2503',
+    '2404', '2504', '2405', '2505', '2406', '2506',
+    '2407', '2507', '2408', '2508', '2409', '2509',
+    '2410', '2510', '2411', '2412'
+]
 
-    for i, slide in enumerate(src.slides):
-        # create blank slide layout (index 6 typically blank) or use dst.slide_layouts[6] if available
-        blank_layout = dst.slide_layouts[6] if len(dst.slide_layouts) > 6 else dst.slide_layouts[0]
-        new_slide = dst.slides.add_slide(blank_layout)
+# Column name mappings (handling variations)
+def get_column_name(df, base_names):
+    """Find the actual column name from a list of possible names"""
+    for name in base_names:
+        if name in df.columns:
+            return name
+    return None
 
-        for shape in slide.shapes:
-            # Copy text frames
-            if shape.has_text_frame:
-                # create a textbox on destination and copy text and basic formatting
-                left = shape.left
-                top = shape.top
-                width = shape.width
-                height = shape.height
-                tx_box = new_slide.shapes.add_textbox(left, top, width, height)
-                dst_tf = tx_box.text_frame
-                dst_tf.clear()
-                for p in shape.text_frame.paragraphs:
-                    new_p = dst_tf.add_paragraph()
-                    new_p.text = p.text
-                    # copy some basic properties (font size)
-                    if p.runs and p.runs[0].font.size:
-                        new_p.font.size = p.runs[0].font.size
-                    # preserve bullet if present
-                    new_p.level = p.level
+# Standardize column names for key fields
+ostatok_brutto_names = [
+    'Остаток(брутто)+забаланс(списанные 95%)',
+]
 
-            # Copy pictures
-            elif shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
-                # shape.image.blob returns binary image bytes
-                img_bytes = shape.image.blob
-                # save to temp file
-                ext = shape.image.ext
-                with tempfile.NamedTemporaryFile(delete=False, suffix='.' + ext) as tmp:
-                    tmp.write(img_bytes)
-                    tmp_path = tmp.name
-                new_slide.shapes.add_picture(tmp_path, shape.left, shape.top, width=shape.width, height=shape.height)
-                os.unlink(tmp_path)
+ostatok_95413_names = [
+    'Остаток 95413 - экв.',
+]
 
-            # Copy tables (basic)
-            elif shape.has_table:
-                tbl = shape.table
-                rows = len(tbl.rows)
-                cols = len(tbl.columns)
-                # create table in new slide with same position/size
-                table_shape = new_slide.shapes.add_table(rows, cols, shape.left, shape.top, shape.width, shape.height)
-                new_tbl = table_shape.table
-                for r in range(rows):
-                    for c in range(cols):
-                        cell = tbl.cell(r, c)
-                        new_tbl.cell(r, c).text = cell.text_frame.text
+passport_names = [
+    'Кредитный паспорт',
+]
 
-            # other shapes (auto-shapes) -> optionally copy text if any
-            elif shape.shape_type == MSO_SHAPE_TYPE.AUTO_SHAPE and shape.has_text_frame:
-                left = shape.left
-                top = shape.top
-                width = shape.width
-                height = shape.height
-                tx_box = new_slide.shapes.add_textbox(left, top, width, height)
-                tx_box.text_frame.text = shape.text
+department_names = [
+    'Кредитный департамент',
+]
 
-            # else: ignore complex shapes (charts, SmartArt) for now
+kod_ankety_names = [
+    'Код анкеты',
+]
 
-    # save new presentation
-    dst.save(output_path)
-    print("Saved cloned presentation to:", output_path)
+# Extract data from each period
+period_data = []
 
+for df, period in zip(all_df, periods):
+    # Get actual column names
+    kod_ankety_col = get_column_name(df, kod_ankety_names)
+    ostatok_brutto_col = get_column_name(df, ostatok_brutto_names)
+    ostatok_95413_col = get_column_name(df, ostatok_95413_names)
+    passport_col = get_column_name(df, passport_names)
+    department_col = get_column_name(df, department_names)
+    
+    if not kod_ankety_col:
+        print(f"Warning: 'Код анкеты' not found in period {period}")
+        continue
+    
+    # Create subset with relevant columns
+    cols_to_keep = [kod_ankety_col]
+    rename_dict = {kod_ankety_col: 'Код анкеты'}
+    
+    if passport_col:
+        cols_to_keep.append(passport_col)
+        rename_dict[passport_col] = 'Кредитный паспорт'
+    
+    if department_col:
+        cols_to_keep.append(department_col)
+        rename_dict[department_col] = 'Кредитный департамент'
+    
+    if ostatok_brutto_col:
+        cols_to_keep.append(ostatok_brutto_col)
+        rename_dict[ostatok_brutto_col] = f'Остаток_брутто_{period}'
+    
+    if ostatok_95413_col:
+        cols_to_keep.append(ostatok_95413_col)
+        rename_dict[ostatok_95413_col] = f'Остаток_95413_{period}'
+    
+    # Extract and rename
+    temp_df = df[cols_to_keep].copy()
+    temp_df = temp_df.rename(columns=rename_dict)
+    
+    # Add sum column for this period
+    if ostatok_brutto_col and ostatok_95413_col:
+        brutto_col = f'Остаток_брутто_{period}'
+        col_95413 = f'Остаток_95413_{period}'
+        temp_df[f'Total_{period}'] = (
+            pd.to_numeric(temp_df[brutto_col], errors='coerce').fillna(0) +
+            pd.to_numeric(temp_df[col_95413], errors='coerce').fillna(0)
+        )
+    
+    period_data.append(temp_df)
+    print(f"Processed period {period}: {len(temp_df)} records")
 
-if __name__ == "__main__":
-    import sys
-    if len(sys.argv) < 3:
-        print("Usage: python clone_pptx.py input.pptx output.pptx")
-        sys.exit(1)
-    clone_presentation(sys.argv[1], sys.argv[2])
+# Start with the first period
+result_df = period_data[0].copy()
+
+# Merge all subsequent periods
+for i, temp_df in enumerate(period_data[1:], 1):
+    result_df = result_df.merge(
+        temp_df,
+        on='Код анкеты',
+        how='outer',
+        suffixes=('', f'_{i}')
+    )
+
+# Consolidate passport and department columns
+# Take the first non-null value across all merged columns
+passport_cols = [col for col in result_df.columns if 'Кредитный паспорт' in col]
+if passport_cols:
+    result_df['Кредитный паспорт'] = result_df[passport_cols].bfill(axis=1).iloc[:, 0]
+    # Drop duplicate columns
+    result_df = result_df.drop(columns=[col for col in passport_cols if col != 'Кредитный паспорт'])
+
+department_cols = [col for col in result_df.columns if 'Кредитный департамент' in col]
+if department_cols:
+    result_df['Кредитный департамент'] = result_df[department_cols].bfill(axis=1).iloc[:, 0]
+    # Drop duplicate columns
+    result_df = result_df.drop(columns=[col for col in department_cols if col != 'Кредитный департамент'])
+
+# Fill NaN values with 0 for numeric columns (balance columns)
+numeric_cols = [col for col in result_df.columns 
+                if col.startswith('Остаток_') or col.startswith('Total_')]
+for col in numeric_cols:
+    result_df[col] = pd.to_numeric(result_df[col], errors='coerce').fillna(0)
+
+# Reorder columns: Kod ankety, Passport, Department, then all period columns
+static_cols = ['Код анкеты']
+if 'Кредитный паспорт' in result_df.columns:
+    static_cols.append('Кредитный паспорт')
+if 'Кредитный департамент' in result_df.columns:
+    static_cols.append('Кредитный департамент')
+
+# Get period columns in order
+period_cols = []
+for period in periods:
+    for col in result_df.columns:
+        if period in col and col not in static_cols:
+            period_cols.append(col)
+
+# Remove duplicates while preserving order
+period_cols = list(dict.fromkeys(period_cols))
+
+final_cols = static_cols + period_cols
+result_df = result_df[final_cols]
+
+# Sort by Kod ankety
+result_df = result_df.sort_values('Код анкеты').reset_index(drop=True)
+
+print(f"\nFinal dataset shape: {result_df.shape}")
+print(f"Unique Kod ankety: {result_df['Код анкеты'].nunique()}")
+print("\nFirst few rows:")
+print(result_df.head())
+print("\nColumn names:")
+print(result_df.columns.tolist())
+
+# Save to Excel
+output_file = 'loan_portfolio_tracking.xlsx'
+result_df.to_excel(output_file, index=False, engine='openpyxl')
+print(f"\nData saved to {output_file}")
+
+# Display summary statistics
+print("\n=== Summary Statistics ===")
+for period in periods:
+    total_col = f'Total_{period}'
+    if total_col in result_df.columns:
+        non_zero = (result_df[total_col] > 0).sum()
+        total_sum = result_df[total_col].sum()
+        print(f"{period}: {non_zero} active loans, Total: {total_sum:,.2f}")
