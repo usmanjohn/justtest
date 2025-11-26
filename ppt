@@ -1,173 +1,41 @@
 import pandas as pd
-import numpy as np
 
-# List of all dataframes with their period labels
-all_df = [
-    df_2401, df_2501, df_2402, df_2502, df_2403, df_2503,
-    df_2404, df_2504, df_2405, df_2505, df_2406, df_2506,
-    df_2407, df_2507, df_2408, df_2508, df_2409, df_2509,
-    df_2410, df_2510, df_2411, df_2412
-]
+# Convert contract dates
+df['date_contract'] = pd.to_datetime(df['date_contract'])
 
-periods = [
-    '2401', '2501', '2402', '2502', '2403', '2503',
-    '2404', '2504', '2405', '2505', '2406', '2506',
-    '2407', '2507', '2408', '2508', '2409', '2509',
-    '2410', '2510', '2411', '2412'
-]
+# Extract all monthly columns and convert them to datetimes
+date_cols = [c for c in df.columns if c.startswith("date_")]
+date_map = {
+    col: pd.to_datetime(col.replace("date_", ""), format="%d.%m.%Y")
+    for col in date_cols
+}
 
-# Column name mappings (handling variations)
-def get_column_name(df, base_names):
-    """Find the actual column name from a list of possible names"""
-    for name in base_names:
-        if name in df.columns:
-            return name
-    return None
+# Sort by actual date
+sorted_date_cols = sorted(date_cols, key=lambda c: date_map[c])
 
-# Standardize column names for key fields
-ostatok_brutto_names = [
-    'Остаток(брутто)+забаланс(списанные 95%)',
-]
-
-ostatok_95413_names = [
-    'Остаток 95413 - экв.',
-]
-
-passport_names = [
-    'Кредитный паспорт',
-]
-
-department_names = [
-    'Кредитный департамент',
-]
-
-kod_ankety_names = [
-    'Код анкеты',
-]
-
-# Extract data from each period
-period_data = []
-
-for df, period in zip(all_df, periods):
-    # Get actual column names
-    kod_ankety_col = get_column_name(df, kod_ankety_names)
-    ostatok_brutto_col = get_column_name(df, ostatok_brutto_names)
-    ostatok_95413_col = get_column_name(df, ostatok_95413_names)
-    passport_col = get_column_name(df, passport_names)
-    department_col = get_column_name(df, department_names)
+# Function to compute dpd columns for a single row
+def calculate_dpd(row):
+    contract_date = row['date_contract']
     
-    if not kod_ankety_col:
-        print(f"Warning: 'Код анкеты' not found in period {period}")
-        continue
+    # first month after contract date
+    start_month = (contract_date + pd.offsets.MonthBegin(1)).to_period('M')
     
-    # Create subset with relevant columns
-    cols_to_keep = [kod_ankety_col]
-    rename_dict = {kod_ankety_col: 'Код анкеты'}
+    dpd_values = {}
+    dpd_index = 0
     
-    if passport_col:
-        cols_to_keep.append(passport_col)
-        rename_dict[passport_col] = 'Кредитный паспорт'
-    
-    if department_col:
-        cols_to_keep.append(department_col)
-        rename_dict[department_col] = 'Кредитный департамент'
-    
-    if ostatok_brutto_col:
-        cols_to_keep.append(ostatok_brutto_col)
-        rename_dict[ostatok_brutto_col] = f'Остаток_брутто_{period}'
-    
-    if ostatok_95413_col:
-        cols_to_keep.append(ostatok_95413_col)
-        rename_dict[ostatok_95413_col] = f'Остаток_95413_{period}'
-    
-    # Extract and rename
-    temp_df = df[cols_to_keep].copy()
-    temp_df = temp_df.rename(columns=rename_dict)
-    
-    # Add sum column for this period
-    if ostatok_brutto_col and ostatok_95413_col:
-        brutto_col = f'Остаток_брутто_{period}'
-        col_95413 = f'Остаток_95413_{period}'
-        temp_df[f'Total_{period}'] = (
-            pd.to_numeric(temp_df[brutto_col], errors='coerce').fillna(0) +
-            pd.to_numeric(temp_df[col_95413], errors='coerce').fillna(0)
-        )
-    
-    period_data.append(temp_df)
-    print(f"Processed period {period}: {len(temp_df)} records")
+    for col in sorted_date_cols:
+        col_month = date_map[col].to_period('M')
+        
+        if col_month >= start_month:
+            dpd_values[f"dpd_{dpd_index}"] = row[col]
+            dpd_index += 1
+            
+    return pd.Series(dpd_values)
 
-# Start with the first period
-result_df = period_data[0].copy()
+# Apply to each row
+dpd_df = df.apply(calculate_dpd, axis=1)
 
-# Merge all subsequent periods
-for i, temp_df in enumerate(period_data[1:], 1):
-    result_df = result_df.merge(
-        temp_df,
-        on='Код анкеты',
-        how='outer',
-        suffixes=('', f'_{i}')
-    )
+# Merge with original
+df_final = pd.concat([df[['dealid', 'date_contract']], dpd_df], axis=1)
 
-# Consolidate passport and department columns
-# Take the first non-null value across all merged columns
-passport_cols = [col for col in result_df.columns if 'Кредитный паспорт' in col]
-if passport_cols:
-    result_df['Кредитный паспорт'] = result_df[passport_cols].bfill(axis=1).iloc[:, 0]
-    # Drop duplicate columns
-    result_df = result_df.drop(columns=[col for col in passport_cols if col != 'Кредитный паспорт'])
-
-department_cols = [col for col in result_df.columns if 'Кредитный департамент' in col]
-if department_cols:
-    result_df['Кредитный департамент'] = result_df[department_cols].bfill(axis=1).iloc[:, 0]
-    # Drop duplicate columns
-    result_df = result_df.drop(columns=[col for col in department_cols if col != 'Кредитный департамент'])
-
-# Fill NaN values with 0 for numeric columns (balance columns)
-numeric_cols = [col for col in result_df.columns 
-                if col.startswith('Остаток_') or col.startswith('Total_')]
-for col in numeric_cols:
-    result_df[col] = pd.to_numeric(result_df[col], errors='coerce').fillna(0)
-
-# Reorder columns: Kod ankety, Passport, Department, then all period columns
-static_cols = ['Код анкеты']
-if 'Кредитный паспорт' in result_df.columns:
-    static_cols.append('Кредитный паспорт')
-if 'Кредитный департамент' in result_df.columns:
-    static_cols.append('Кредитный департамент')
-
-# Get period columns in order
-period_cols = []
-for period in periods:
-    for col in result_df.columns:
-        if period in col and col not in static_cols:
-            period_cols.append(col)
-
-# Remove duplicates while preserving order
-period_cols = list(dict.fromkeys(period_cols))
-
-final_cols = static_cols + period_cols
-result_df = result_df[final_cols]
-
-# Sort by Kod ankety
-result_df = result_df.sort_values('Код анкеты').reset_index(drop=True)
-
-print(f"\nFinal dataset shape: {result_df.shape}")
-print(f"Unique Kod ankety: {result_df['Код анкеты'].nunique()}")
-print("\nFirst few rows:")
-print(result_df.head())
-print("\nColumn names:")
-print(result_df.columns.tolist())
-
-# Save to Excel
-output_file = 'loan_portfolio_tracking.xlsx'
-result_df.to_excel(output_file, index=False, engine='openpyxl')
-print(f"\nData saved to {output_file}")
-
-# Display summary statistics
-print("\n=== Summary Statistics ===")
-for period in periods:
-    total_col = f'Total_{period}'
-    if total_col in result_df.columns:
-        non_zero = (result_df[total_col] > 0).sum()
-        total_sum = result_df[total_col].sum()
-        print(f"{period}: {non_zero} active loans, Total: {total_sum:,.2f}")
+df_final
