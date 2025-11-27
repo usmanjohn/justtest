@@ -1,41 +1,68 @@
 import pandas as pd
+import numpy as np
+from datetime import datetime
 
-# Convert contract dates
-df['date_contract'] = pd.to_datetime(df['date_contract'])
+# Assuming your dataframe is named 'df'
+# df columns: dealid, start_date, date_01.01.2023, date_01.02.2023, ..., date_01.11.2025
 
-# Extract all monthly columns and convert them to datetimes
-date_cols = [c for c in df.columns if c.startswith("date_")]
-date_map = {
-    col: pd.to_datetime(col.replace("date_", ""), format="%d.%m.%Y")
-    for col in date_cols
-}
+# Step 1: Get all date columns (excluding dealid and start_date)
+date_columns = [col for col in df.columns if col.startswith('date_')]
 
-# Sort by actual date
-sorted_date_cols = sorted(date_cols, key=lambda c: date_map[c])
+# Step 2: Convert start_date to datetime if it's not already
+df['start_date'] = pd.to_datetime(df['start_date'])
 
-# Function to compute dpd columns for a single row
-def calculate_dpd(row):
-    contract_date = row['date_contract']
+# Step 3: Parse date columns to get actual dates
+# Assuming format is 'date_DD.MM.YYYY'
+date_mapping = {}
+for col in date_columns:
+    # Extract date string from column name (e.g., 'date_01.01.2023' -> '01.01.2023')
+    date_str = col.replace('date_', '')
+    # Convert to datetime
+    date_mapping[col] = pd.to_datetime(date_str, format='%d.%m.%Y')
+
+# Step 4: Sort date columns chronologically
+sorted_date_cols = sorted(date_columns, key=lambda x: date_mapping[x])
+
+# Step 5: Find the maximum number of periods needed
+# This is the maximum distance between any start_date and the last date column
+max_periods = len(sorted_date_cols)
+
+# Step 6: Create DPD columns
+dpd_columns = [f'dpd_{i}' for i in range(max_periods)]
+
+# Step 7: Initialize DPD columns with NaN
+for col in dpd_columns:
+    df[col] = np.nan
+
+# Step 8: Fill DPD columns for each row based on start_date
+for idx, row in df.iterrows():
+    start_date = row['start_date']
     
-    # first month after contract date
-    start_month = (contract_date + pd.offsets.MonthBegin(1)).to_period('M')
-    
-    dpd_values = {}
-    dpd_index = 0
-    
-    for col in sorted_date_cols:
-        col_month = date_map[col].to_period('M')
+    # Find which date columns come on or after the start_date
+    dpd_idx = 0
+    for date_col in sorted_date_cols:
+        col_date = date_mapping[date_col]
         
-        if col_month >= start_month:
-            dpd_values[f"dpd_{dpd_index}"] = row[col]
-            dpd_index += 1
-            
-    return pd.Series(dpd_values)
+        # If the column date is on or after start date, assign it to next DPD column
+        if col_date >= start_date:
+            if dpd_idx < max_periods:
+                df.at[idx, f'dpd_{dpd_idx}'] = row[date_col]
+                dpd_idx += 1
 
-# Apply to each row
-dpd_df = df.apply(calculate_dpd, axis=1)
+print("DPD Aging Analysis Complete!")
+print(f"\nDataFrame shape: {df.shape}")
+print(f"\nCreated {max_periods} DPD columns (dpd_0 to dpd_{max_periods-1})")
+print("\nFirst few rows:")
+print(df[['dealid', 'start_date'] + dpd_columns[:5]].head(10))
 
-# Merge with original
-df_final = pd.concat([df[['dealid', 'date_contract']], dpd_df], axis=1)
+# Optional: Create a summary showing non-null DPD values per column
+print("\n=== DPD Column Summary ===")
+for col in dpd_columns[:10]:  # Show first 10 DPD columns
+    non_null_count = df[col].notna().sum()
+    mean_dpd = df[col].mean()
+    max_dpd = df[col].max()
+    print(f"{col}: {non_null_count} clients, Mean: {mean_dpd:.1f}, Max: {max_dpd:.0f}")
 
-df_final
+# Save to Excel if needed
+df.to_excel('aging_analysis_with_dpd.xlsx', index=False)
+print("\nData saved to 'aging_analysis_with_dpd.xlsx'")
