@@ -1,0 +1,48 @@
+import pandas as pd
+import numpy as np
+from datetime import datetime
+
+# Sample data
+data = {
+    'dealid': [234432, 234432, 234432],
+    'valuedate': ['2023-04-05', '2023-05-06', '2023-06-03'],
+    'tilldate': ['2023-07-11', '2023-07-13', '2023-08-04']
+}
+
+df = pd.DataFrame(data)
+
+# Convert to datetime
+df['valuedate'] = pd.to_datetime(df['valuedate'])
+df['tilldate'] = pd.to_datetime(df['tilldate'])
+
+# Get the range of months to create columns
+min_date = df['valuedate'].min()
+max_date = df['tilldate'].max()
+
+# Generate list of month start dates
+month_starts = pd.date_range(start=min_date.replace(day=1), 
+                              end=max_date, 
+                              freq='MS')
+
+# Function to calculate days past due for each row and month
+def calculate_past_due(row, month_date):
+    # Check if this month is in the active period
+    if month_date >= row['valuedate'] and month_date < row['tilldate']:
+        return (month_date - row['valuedate']).days
+    else:
+        return 0
+
+# Create columns for each month
+for month_date in month_starts:
+    col_name = month_date.strftime('%Y-%m-%d')
+    df[col_name] = df.apply(lambda row: calculate_past_due(row, month_date), axis=1)
+
+# Group by dealid and take max for each month column
+month_columns = [col for col in df.columns if col not in ['dealid', 'valuedate', 'tilldate']]
+result = df.groupby('dealid')[month_columns].max().reset_index()
+
+print("Original DataFrame:")
+print(df)
+print("\n" + "="*80 + "\n")
+print("Result with max past due days per month:")
+print(result)
