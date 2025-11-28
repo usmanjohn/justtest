@@ -1,0 +1,189 @@
+import pandas as pd
+import numpy as np
+from datetime import datetime
+from dateutil.relativedelta import relativedelta
+
+def calculate_monthly_dpd(df):
+    """
+    Calculate DPD for each dealid for every month from 2020-01-01 to 2025-11-01
+    
+    Logic: 
+    - For reporting month M, calculate cumulative DPD that occurred BEFORE month M
+    - DPD accumulates from valuedate until tilldate
+    - After tilldate, DPD resets to 0
+    - One row per dealid per month
+    - If multiple past due periods exist, take the maximum DPD
+    
+    Parameters:
+    -----------
+    df: DataFrame with columns ['dealid', 'valuedate', 'tilldate']
+    
+    Returns:
+    --------
+    DataFrame with columns ['dealid', 'reporting_date', 'dpd', 'status']
+    """
+    
+    # Convert date columns to datetime
+    df = df.copy()
+    df['valuedate'] = pd.to_datetime(df['valuedate'])
+    df['tilldate'] = pd.to_datetime(df['tilldate'])
+    
+    # Generate monthly reporting dates (first day of each month)
+    date_range = pd.date_range(start='2020-01-01', end='2025-11-01', freq='MS')
+    
+    # Get unique dealids
+    dealids = df['dealid'].unique()
+    
+    result_data = []
+    
+    for dealid in dealids:
+        # Get all past due periods for this dealid
+        deal_records = df[df['dealid'] == dealid].sort_values('valuedate')
+        
+        for reporting_date in date_range:
+            max_dpd = 0
+            status = 'current'
+            
+            for _, record in deal_records.iterrows():
+                valuedate = record['valuedate']
+                tilldate = record['tilldate']
+                
+                # Calculate the end of the month BEFORE the reporting date
+                previous_month_end = reporting_date - pd.Timedelta(days=1)
+                
+                # Calculate DPD based on what happened BEFORE the reporting month
+                if previous_month_end < valuedate:
+                    # Past due hasn't started yet in the previous month
+                    dpd = 0
+                elif previous_month_end >= tilldate:
+                    # Past due ended before or during the previous month
+                    # Check if tilldate is in a month before the reporting month
+                    if tilldate.replace(day=1) < reporting_date:
+                        # Past due ended in an earlier month, so DPD = 0
+                        dpd = 0
+                    else:
+                        # Past due ended in the previous month, calculate total DPD
+                        dpd = (tilldate - valuedate).days
+                        status = 'resolved'
+                else:
+                    # Past due is still ongoing as of the previous month end
+                    # Calculate cumulative DPD up to the end of previous month
+                    dpd = (previous_month_end - valuedate).days + 1
+                    status = 'past_due'
+                
+                # Take maximum DPD if multiple periods overlap
+                if dpd > max_dpd:
+                    max_dpd = dpd
+            
+            result_data.append({
+                'dealid': dealid,
+                'reporting_date': reporting_date,
+                'dpd': max_dpd,
+                'status': status if max_dpd > 0 else 'current'
+            })
+    
+    # Create result dataframe
+    result_df = pd.DataFrame(result_data)
+    
+    return result_df
+
+
+def add_dpd_buckets(result_df):
+    """
+    Add standard DPD buckets following Basel III guidelines
+    """
+    result_df = result_df.copy()
+    
+    conditions = [
+        result_df['dpd'] == 0,
+        result_df['dpd'].between(1, 30),
+        result_df['dpd'].between(31, 60),
+        result_df['dpd'].between(61, 90),
+        result_df['dpd'].between(91, 180),
+        result_df['dpd'] > 180
+    ]
+    
+    choices = ['Current', '1-30 DPD', '31-60 DPD', '61-90 DPD', 
+               '91-180 DPD', '180+ DPD (NPL)']
+    
+    result_df['dpd_bucket'] = np.select(conditions, choices, default='Unknown')
+    
+    return result_df
+
+
+def get_summary_statistics(result_df):
+    """
+    Generate summary statistics for DPD analysis
+    """
+    summary = {
+        'total_deals': result_df['dealid'].nunique(),
+        'total_observations': len(result_df),
+        'avg_dpd_overall': result_df['dpd'].mean(),
+        'avg_dpd_when_past_due': result_df[result_df['dpd'] > 0]['dpd'].mean(),
+        'max_dpd': result_df['dpd'].max(),
+        'deals_ever_past_due': result_df[result_df['dpd'] > 0]['dealid'].nunique(),
+        'pct_months_with_past_due': (result_df['dpd'] > 0).sum() / len(result_df) * 100
+    }
+    
+    return pd.Series(summary)
+
+
+def get_monthly_delinquency_rate(result_df):
+    """
+    Calculate monthly delinquency rates (% of deals past due each month)
+    """
+    monthly = result_df.groupby('reporting_date').agg({
+        'dealid': 'count',
+        'dpd': lambda x: (x > 0).sum()
+    }).rename(columns={'dealid': 'total_deals', 'dpd': 'past_due_deals'})
+    
+    monthly['delinquency_rate_%'] = (monthly['past_due_deals'] / monthly['total_deals'] * 100).round(2)
+    
+    return monthly
+
+
+# Example usage and validation:
+"""
+# Example 1: valuedate = 03.04.2023, tilldate = 18.06.2023
+df1 = pd.DataFrame({
+    'dealid': ['CLIENT001'],
+    'valuedate': ['2023-04-03'],
+    'tilldate': ['2023-06-18']
+})
+
+result1 = calculate_monthly_dpd(df1)
+print("=== EXAMPLE 1 ===")
+print("valuedate = 03.04.2023, tilldate = 18.06.2023")
+print(result1[(result1['reporting_date'] >= '2023-04-01') & 
+              (result1['reporting_date'] <= '2023-08-01')])
+
+# Expected:
+# 01.04.2023 => 0
+# 01.05.2023 => 27 (Apr 3-30)
+# 01.06.2023 => 58 (Apr 3-30 + May 1-31)
+# 01.07.2023 => 0 (resolved)
+
+print("\n=== EXAMPLE 2 ===")
+# Example 2: valuedate = 03.04.2023, tilldate = 18.04.2023
+df2 = pd.DataFrame({
+    'dealid': ['CLIENT002'],
+    'valuedate': ['2023-04-03'],
+    'tilldate': ['2023-04-18']
+})
+
+result2 = calculate_monthly_dpd(df2)
+print("valuedate = 03.04.2023, tilldate = 18.04.2023")
+print(result2[(result2['reporting_date'] >= '2023-04-01') & 
+              (result2['reporting_date'] <= '2023-06-01')])
+
+# Expected:
+# 01.04.2023 => 0
+# 01.05.2023 => 15 (Apr 3-18)
+# 01.06.2023 => 0 (resolved)
+
+# Full usage with your data:
+# df = pd.read_excel('your_data.xlsx')  # or pd.read_csv()
+# result = calculate_monthly_dpd(df)
+# result = add_dpd_buckets(result)
+# result.to_excel('monthly_dpd_output.xlsx', index=False)
+"""
