@@ -1,3 +1,4 @@
+new_df.apply(lambda x: x['value_date_end_month'] - x['valuedate'] if x[valuedate].month_and_year<x['tilldate'].month_and_year else x['tilldate']-x['valuedate'], axis = 1)
 import pandas as pd
 import numpy as np
 from datetime import datetime
