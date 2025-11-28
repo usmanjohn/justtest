@@ -1,0 +1,270 @@
+import polars as pl
+import pandas as pd
+from datetime import datetime, date
+
+def calculate_monthly_dpd_polars(df):
+    """
+    MEMORY-EFFICIENT: Calculate DPD using Polars (much faster and less memory than pandas)
+    
+    For 3.7M deals × 70 months = ~260M rows, Polars handles this efficiently
+    
+    Parameters:
+    -----------
+    df: pandas DataFrame or polars DataFrame with columns ['dealid', 'valuedate', 'tilldate']
+    
+    Returns:
+    --------
+    polars DataFrame with columns ['dealid', 'reporting_date', 'dpd', 'status']
+    """
+    
+    print("Starting Polars DPD calculation...")
+    print(f"Input data shape: {df.shape}")
+    
+    # Convert pandas to polars if needed
+    if isinstance(df, pd.DataFrame):
+        pl_df = pl.from_pandas(df)
+    else:
+        pl_df = df
+    
+    # Ensure date columns are properly typed
+    pl_df = pl_df.with_columns([
+        pl.col('valuedate').cast(pl.Date),
+        pl.col('tilldate').cast(pl.Date)
+    ])
+    
+    # Generate monthly reporting dates
+    date_range = pl.date_range(
+        start=date(2020, 1, 1),
+        end=date(2025, 11, 1),
+        interval='1mo',
+        eager=True
+    ).alias('reporting_date')
+    
+    dates_df = pl.DataFrame({'reporting_date': date_range})
+    
+    print(f"Processing {len(pl_df):,} deals across {len(dates_df)} months...")
+    print("Creating cross join... (this may take a moment)")
+    
+    # Cross join: all dealids × all reporting dates
+    result = pl_df.join(dates_df, how='cross')
+    
+    print(f"Cross join complete: {len(result):,} rows")
+    print("Calculating DPD...")
+    
+    # Calculate previous month end
+    result = result.with_columns([
+        (pl.col('reporting_date') - pl.duration(days=1)).alias('prev_month_end')
+    ])
+    
+    # Vectorized DPD calculation using Polars expressions
+    result = result.with_columns([
+        pl.when(pl.col('prev_month_end') < pl.col('valuedate'))
+        .then(0)  # Not started yet
+        
+        .when(
+            (pl.col('tilldate') < pl.col('reporting_date')) &
+            (pl.col('tilldate').dt.month() < pl.col('reporting_date').dt.month())
+        )
+        .then(0)  # Ended before this month
+        
+        .when(
+            (pl.col('prev_month_end') >= pl.col('tilldate')) &
+            (pl.col('tilldate').dt.month() == pl.col('prev_month_end').dt.month())
+        )
+        .then((pl.col('tilldate') - pl.col('valuedate')).dt.total_days())  # Ended in prev month
+        
+        .when(
+            (pl.col('prev_month_end') >= pl.col('valuedate')) &
+            (pl.col('prev_month_end') < pl.col('tilldate'))
+        )
+        .then((pl.col('prev_month_end') - pl.col('valuedate')).dt.total_days() + 1)  # Ongoing
+        
+        .otherwise(0)
+        .alias('dpd')
+    ])
+    
+    # Add status
+    result = result.with_columns([
+        pl.when(pl.col('dpd') == 0)
+        .then(pl.lit('current'))
+        .when(
+            (pl.col('prev_month_end') >= pl.col('valuedate')) &
+            (pl.col('prev_month_end') < pl.col('tilldate'))
+        )
+        .then(pl.lit('past_due'))
+        .otherwise(pl.lit('resolved'))
+        .alias('status')
+    ])
+    
+    # Select only needed columns
+    result = result.select(['dealid', 'reporting_date', 'dpd', 'status'])
+    
+    print("✓ Calculation complete!")
+    print(f"Output shape: {result.shape}")
+    
+    return result
+
+
+def calculate_monthly_dpd_chunked(df, chunk_size=500000):
+    """
+    ULTRA MEMORY-EFFICIENT: Process in chunks to avoid memory errors
+    Best for very large datasets (3M+ rows)
+    
+    Parameters:
+    -----------
+    df: pandas DataFrame with columns ['dealid', 'valuedate', 'tilldate']
+    chunk_size: number of deals to process at once (default 500k)
+    """
+    
+    print(f"Starting CHUNKED processing with chunk_size={chunk_size:,}")
+    print(f"Input data shape: {df.shape}")
+    
+    # Convert to polars
+    pl_df = pl.from_pandas(df) if isinstance(df, pd.DataFrame) else df
+    
+    pl_df = pl_df.with_columns([
+        pl.col('valuedate').cast(pl.Date),
+        pl.col('tilldate').cast(pl.Date)
+    ])
+    
+    # Split into chunks
+    n_chunks = (len(pl_df) + chunk_size - 1) // chunk_size
+    print(f"Processing {n_chunks} chunks...")
+    
+    results = []
+    
+    for i in range(n_chunks):
+        start_idx = i * chunk_size
+        end_idx = min((i + 1) * chunk_size, len(pl_df))
+        
+        print(f"\nChunk {i+1}/{n_chunks}: rows {start_idx:,} to {end_idx:,}")
+        
+        chunk = pl_df.slice(start_idx, end_idx - start_idx)
+        chunk_result = calculate_monthly_dpd_polars(chunk)
+        results.append(chunk_result)
+    
+    print("\nCombining all chunks...")
+    final_result = pl.concat(results)
+    
+    print(f"✓ All chunks processed! Final shape: {final_result.shape}")
+    
+    return final_result
+
+
+def add_dpd_buckets_polars(result_df):
+    """
+    Add DPD buckets using Polars
+    """
+    result_df = result_df.with_columns([
+        pl.when(pl.col('dpd') == 0)
+        .then(pl.lit('Current'))
+        .when(pl.col('dpd').is_between(1, 30))
+        .then(pl.lit('1-30 DPD'))
+        .when(pl.col('dpd').is_between(31, 60))
+        .then(pl.lit('31-60 DPD'))
+        .when(pl.col('dpd').is_between(61, 90))
+        .then(pl.lit('61-90 DPD'))
+        .when(pl.col('dpd').is_between(91, 180))
+        .then(pl.lit('91-180 DPD'))
+        .otherwise(pl.lit('180+ DPD (NPL)'))
+        .alias('dpd_bucket')
+    ])
+    
+    return result_df
+
+
+def save_results(result_df, filename='dpd_output.csv'):
+    """
+    Save results efficiently
+    CSV is recommended for large files (faster than Excel)
+    """
+    print(f"\nSaving to {filename}...")
+    
+    if filename.endswith('.csv'):
+        result_df.write_csv(filename)
+    elif filename.endswith('.parquet'):
+        result_df.write_parquet(filename)  # Most efficient format
+    else:
+        # Convert to pandas for Excel (not recommended for 260M rows!)
+        print("Warning: Excel format not recommended for large datasets")
+        result_df.to_pandas().to_excel(filename, index=False)
+    
+    print(f"✓ Saved successfully!")
+
+
+# USAGE EXAMPLES:
+
+"""
+# ============================================
+# METHOD 1: Standard Polars (if you have 16GB+ RAM)
+# ============================================
+import polars as pl
+import time
+
+# Your pandas dataframe is called new_df
+start = time.time()
+
+result = calculate_monthly_dpd_polars(new_df)
+result = add_dpd_buckets_polars(result)
+
+# Save as CSV (much faster than Excel for large data)
+result.write_csv('dpd_output.csv')
+
+# Or save as Parquet (most efficient)
+result.write_parquet('dpd_output.parquet')
+
+print(f"Completed in {time.time() - start:.1f} seconds")
+
+
+# ============================================
+# METHOD 2: Chunked processing (if memory issues persist)
+# ============================================
+import polars as pl
+import time
+
+start = time.time()
+
+# Process 500k deals at a time
+result = calculate_monthly_dpd_chunked(new_df, chunk_size=500000)
+result = add_dpd_buckets_polars(result)
+
+# Save results
+result.write_csv('dpd_output.csv')
+
+print(f"Completed in {time.time() - start:.1f} seconds")
+
+
+# ============================================
+# To read results later:
+# ============================================
+# CSV:
+df = pl.read_csv('dpd_output.csv')
+
+# Parquet (faster):
+df = pl.read_parquet('dpd_output.parquet')
+
+# Convert to pandas if needed:
+pandas_df = df.to_pandas()
+
+
+# ============================================
+# Quick analysis with Polars:
+# ============================================
+# Summary statistics
+print(result.select([
+    pl.col('dealid').n_unique().alias('total_deals'),
+    pl.col('dpd').mean().alias('avg_dpd'),
+    pl.col('dpd').max().alias('max_dpd'),
+    (pl.col('dpd') > 0).sum().alias('past_due_months')
+]))
+
+# Monthly delinquency rate
+monthly = result.group_by('reporting_date').agg([
+    pl.col('dealid').count().alias('total'),
+    (pl.col('dpd') > 0).sum().alias('past_due')
+]).with_columns([
+    ((pl.col('past_due') / pl.col('total')) * 100).alias('delq_rate_%')
+]).sort('reporting_date')
+
+print(monthly)
+"""
