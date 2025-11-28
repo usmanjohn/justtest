@@ -1,0 +1,12 @@
+max(CASE when dlf.valuedate<=to_date('31.01.2020','dd.mm.yyyy') and  dlf.tilldate >= dlf.valuedate and dlf.tilldate>=to_date('01.01.2020','dd.mm.yyyy') and dlf.tilldate<=to_date('31.01.2020','dd.mm.yyyy')  then
+   dlf.tilldate - dlf.Valuedate + 1
+         when  dlf.valuedate<=to_date('31.01.2020','dd.mm.yyyy') and  dlf.tilldate >= dlf.valuedate and dlf.tilldate>to_date('31.01.2020','dd.mm.yyyy') then
+    to_date('31.01.2020','dd.mm.yyyy') - dlf.Valuedate + 1 
+          when  dlf.valuedate<=to_date('31.01.2020','dd.mm.yyyy') and dlf.tilldate>=to_date('01.01.2020','dd.mm.yyyy') and  dlf.tilldate < dlf.valuedate then 1 end) as "01/2020",
+max(CASE when dlf.valuedate<=to_date('29.02.2020','dd.mm.yyyy') and  dlf.tilldate >= dlf.valuedate and dlf.tilldate>=to_date('29.02.2020','dd.mm.yyyy') and dlf.tilldate<=to_date('29.02.2020','dd.mm.yyyy')  then
+   dlf.tilldate - dlf.Valuedate + 1
+         when  dlf.valuedate<=to_date('29.02.2020','dd.mm.yyyy') and  dlf.tilldate >= dlf.valuedate and dlf.tilldate>to_date('29.02.2020','dd.mm.yyyy') then
+    to_date('29.02.2020','dd.mm.yyyy') - dlf.Valuedate + 1 
+          when  dlf.valuedate<=to_date('29.02.2020','dd.mm.yyyy') and dlf.tilldate>=to_date('29.02.2020','dd.mm.yyyy') and  dlf.tilldate < dlf.valuedate then 1 end) as "02/2020",
+
+As you see, for each max, I need to put the end months up to 31.08.2025. Can you help me with that?
