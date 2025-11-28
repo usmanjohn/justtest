@@ -1,19 +1,66 @@
-max(
-    CASE 
-        WHEN dlf.valuedate <= TO_DATE('<END>','dd.mm.yyyy')
-         AND dlf.tilldate >= dlf.valuedate
-         AND dlf.tilldate >= TO_DATE('<START>','dd.mm.yyyy')
-         AND dlf.tilldate <= TO_DATE('<END>','dd.mm.yyyy')
-            THEN dlf.tilldate - dlf.valuedate + 1
+#df = pd.read_excel("for_vintage.xlsb")
 
-        WHEN dlf.valuedate <= TO_DATE('<END>','dd.mm.yyyy')
-         AND dlf.tilldate >= dlf.valuedate
-         AND dlf.tilldate >  TO_DATE('<END>','dd.mm.yyyy')
-            THEN TO_DATE('<END>','dd.mm.yyyy') - dlf.valuedate + 1
+df['contract_date'] = pd.to_timedelta(df['contract_date'], unit='d') + pd.Timestamp('1899-12-30')
 
-        WHEN dlf.valuedate <= TO_DATE('<END>','dd.mm.yyyy')
-         AND dlf.tilldate >= TO_DATE('<START>','dd.mm.yyyy')
-         AND dlf.tilldate < dlf.valuedate
-            THEN 1
-    END
-) AS "<MM/YYYY>",
+date_cols = [c for c in df.columns if c.startswith("date_")]
+
+df['start_date'] = df['contract_date'].dt.to_period('M').dt.start_time
+
+dpd_list = []
+for i, col in enumerate(date_cols):
+    dpd_list.append(f"dpd_{i}")
+
+df[dpd_list] = 0
+
+orderee = [col for col in df.columns if col not in date_cols] + date_cols
+
+df = df[orderee]
+
+import pandas as pd
+import numpy as np
+from datetime import datetime
+
+date_columns = [col for col in df.columns if col.startswith('date_')]
+
+df['start_date'] = pd.to_datetime(df['start_date'])
+date_mapping = {}
+for col in date_columns:
+    # Extract date string from column name (e.g., 'date_01.01.2023' -> '01.01.2023')
+    date_str = col.replace('date_', '')
+    # Convert to datetime
+    date_mapping[col] = pd.to_datetime(date_str, format='%d.%m.%Y')
+print("date_mapping")
+# Step 4: Sort date columns chronologically
+sorted_date_cols = sorted(date_columns, key=lambda x: date_mapping[x])
+
+# Step 5: Find the maximum number of periods needed
+# This is the maximum distance between any start_date and the last date column
+max_periods = len(sorted_date_cols)
+
+# Step 6: Create DPD columns
+dpd_columns = [f'dpd_{i}' for i in range(max_periods)]
+
+# Step 7: Initialize DPD columns with NaN
+for col in dpd_columns:
+    df[col] = np.nan
+
+# Step 8: Fill DPD columns for each row based on start_date
+for idx, row in df.iterrows():
+    start_date = row['start_date']
+    
+    # Find which date columns come on or after the start_date
+    dpd_idx = 0
+    for date_col in sorted_date_cols:
+        col_date = date_mapping[date_col]
+        
+        # If the column date is on or after start date, assign it to next DPD column
+        if col_date >= start_date:
+            if dpd_idx < max_periods:
+                df.at[idx, f'dpd_{dpd_idx}'] = row[date_col]
+                dpd_idx += 1
+
+print("DPD Aging Analysis Complete!")
+print(f"\nDataFrame shape: {df.shape}")
+print(f"\nCreated {max_periods} DPD columns (dpd_0 to dpd_{max_periods-1})")
+print("\nFirst few rows:")
+print(df[['dealid', 'start_date'] + dpd_columns[:5]].head(10))
