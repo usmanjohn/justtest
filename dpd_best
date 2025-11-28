@@ -1,0 +1,48 @@
+import pandas as pd
+import numpy as np
+
+# Convert contract date
+df['contract_date'] = (
+    pd.to_timedelta(df['contract_date'], unit='d') + pd.Timestamp('1899-12-30')
+)
+
+# Extract all date columns
+date_cols = [c for c in df.columns if c.startswith("date_")]
+
+# Convert 'date_xx' column names → actual datetime
+date_map = {
+    col: pd.to_datetime(col.replace("date_", ""), format="%d.%m.%Y")
+    for col in date_cols
+}
+
+# Sort date columns chronologically
+sorted_date_cols = sorted(date_cols, key=lambda c: date_map[c])
+
+# ----------------------------
+# IMPORTANT FIX:
+# Start date = FIRST DAY OF NEXT MONTH
+# ----------------------------
+df['start_date'] = df['contract_date'] + pd.offsets.MonthBegin(1)
+
+# Prepare dpd columns
+max_dpd = len(sorted_date_cols)
+dpd_cols = [f"dpd_{i}" for i in range(max_dpd)]
+df[dpd_cols] = np.nan
+
+# Fill dpd columns
+for idx, row in df.iterrows():
+    start_date = row['start_date']
+
+    dpd_index = 0
+
+    for col in sorted_date_cols:
+        col_date = date_map[col]
+
+        # Only month-aligned values starting from next month
+        if col_date >= start_date:
+
+            df.at[idx, f"dpd_{dpd_index}"] = row[col]
+            dpd_index += 1
+
+            if dpd_index == max_dpd:
+                break
