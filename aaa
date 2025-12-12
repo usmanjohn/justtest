@@ -1,66 +1,103 @@
-#df = pd.read_excel("for_vintage.xlsb")
-
-df['contract_date'] = pd.to_timedelta(df['contract_date'], unit='d') + pd.Timestamp('1899-12-30')
-
-date_cols = [c for c in df.columns if c.startswith("date_")]
-
-df['start_date'] = df['contract_date'].dt.to_period('M').dt.start_time
-
-dpd_list = []
-for i, col in enumerate(date_cols):
-    dpd_list.append(f"dpd_{i}")
-
-df[dpd_list] = 0
-
-orderee = [col for col in df.columns if col not in date_cols] + date_cols
-
-df = df[orderee]
-
 import pandas as pd
-import numpy as np
-from datetime import datetime
+import glob
+import os
 
-date_columns = [col for col in df.columns if col.startswith('date_')]
-
-df['start_date'] = pd.to_datetime(df['start_date'])
-date_mapping = {}
-for col in date_columns:
-    # Extract date string from column name (e.g., 'date_01.01.2023' -> '01.01.2023')
-    date_str = col.replace('date_', '')
-    # Convert to datetime
-    date_mapping[col] = pd.to_datetime(date_str, format='%d.%m.%Y')
-print("date_mapping")
-# Step 4: Sort date columns chronologically
-sorted_date_cols = sorted(date_columns, key=lambda x: date_mapping[x])
-
-# Step 5: Find the maximum number of periods needed
-# This is the maximum distance between any start_date and the last date column
-max_periods = len(sorted_date_cols)
-
-# Step 6: Create DPD columns
-dpd_columns = [f'dpd_{i}' for i in range(max_periods)]
-
-# Step 7: Initialize DPD columns with NaN
-for col in dpd_columns:
-    df[col] = np.nan
-
-# Step 8: Fill DPD columns for each row based on start_date
-for idx, row in df.iterrows():
-    start_date = row['start_date']
+def process_and_merge_excels():
+    # Find all Excel files in the current directory
+    excel_files = glob.glob('*.xlsx') + glob.glob('*.xls')
     
-    # Find which date columns come on or after the start_date
-    dpd_idx = 0
-    for date_col in sorted_date_cols:
-        col_date = date_mapping[date_col]
-        
-        # If the column date is on or after start date, assign it to next DPD column
-        if col_date >= start_date:
-            if dpd_idx < max_periods:
-                df.at[idx, f'dpd_{dpd_idx}'] = row[date_col]
-                dpd_idx += 1
+    if not excel_files:
+        print("No Excel files found in the current directory.")
+        return
 
-print("DPD Aging Analysis Complete!")
-print(f"\nDataFrame shape: {df.shape}")
-print(f"\nCreated {max_periods} DPD columns (dpd_0 to dpd_{max_periods-1})")
-print("\nFirst few rows:")
-print(df[['dealid', 'start_date'] + dpd_columns[:5]].head(10))
+    all_dataframes = []
+    
+    # Iterate through each file found
+    for file_path in excel_files:
+        print(f"--- Processing file: {file_path} ---")
+        
+        try:
+            # Load all sheets in the file. We use openpyxl engine for .xlsx files.
+            # Using sheet_name=None reads all sheets into a dictionary of DataFrames.
+            xls = pd.ExcelFile(file_path, engine='openpyxl')
+            sheet_names = xls.sheet_names
+            
+            for sheet_name in sheet_names:
+                print(f"  - Reading sheet: '{sheet_name}'")
+
+                # Read the specific sheet. We target only the first two columns (A and B).
+                # header=None so we can process the merged company name manually later.
+                # usecols='A:B' limits reading to only those columns.
+                df = pd.read_excel(
+                    xls,
+                    sheet_name=sheet_name,
+                    usecols='A:B',
+                    header=None,
+                    # data_only=True ensures we read values, not formulas (default behavior in pandas)
+                    #data_only=True
+                )
+                
+                # --- Data Cleaning and Structuring ---
+
+                # Remove any fully empty rows that might appear
+                df = df.dropna(how='all')
+
+                # Skip empty sheets (if no data remains after dropping empty rows)
+                if df.empty:
+                    print(f"    -> Sheet '{sheet_name}' is empty or has no data in first two columns. Skipping.")
+                    continue
+
+                # 1. Extract the Company Name (which is in the very first cell [0, 0] or [0, 1] due to merging)
+                # We prioritize the first non-NaN value in the first row.
+                company_name = df.iloc[0].dropna().iloc[0]
+                
+                # 2. Assign the company name to the second column for all relevant rows
+                # We drop the first row now as it was just the header row we extracted data from
+                df = df.iloc[1:].copy() 
+                
+                # The first column will be the 'Categories' column name across all sheets
+                df.rename(columns={df.columns[0]: 'Category'}, inplace=True)
+                
+                # The second column gets the specific company name derived from the header
+                df.rename(columns={df.columns[1]: company_name}, inplace=True)
+                
+                # Ensure 'Category' column is first
+                df = df[['Category', company_name]]
+
+                # Add the cleaned dataframe to our list
+                all_dataframes.append(df)
+                print(f"    -> Successfully processed '{company_name}' data.")
+
+        except Exception as e:
+            print(f"An error occurred while processing file {file_path}: {e}")
+
+    # --- Merging All DataFrames ---
+
+    if not all_dataframes:
+        print("No data was successfully processed from any file/sheet.")
+        return
+        
+    print("\n--- Merging all processed dataframes ---")
+    
+    # Merge all dataframes on the 'Category' column (left join style to keep all categories)
+    # The first dataframe initializes the merge, subsequent ones merge iteratively.
+    merged_df = all_dataframes[0]
+    for i in range(1, len(all_dataframes)):
+        # outer join ensures we capture all unique categories present across all sheets
+        merged_df = pd.merge(merged_df, all_dataframes[i], on='Category', how='outer')
+        
+    # Optional: Fill potential NaNs in the final data body with a placeholder like 0 or an empty string
+    # merged_df = merged_df.fillna(0) 
+
+    # Save the final result to a new Excel file
+    #output_filename = 'Merged_Company_Data.xlsx'
+    #merged_df.to_excel(output_filename, index=False)
+    
+    print(f"\n--- DONE ---")
+    print("Final Merged Data Shape:", merged_df.shape)
+    print("\nFirst few rows of merged data:\n", merged_df.head())
+    return merged_df
+
+# Run the function
+
+
