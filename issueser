@@ -1,71 +1,26 @@
-dolya_df = df_long[(df_long['Type'] == 'Доля,%') & (df_long['Branch'] != 'Все')]
+Yangi yil, tuzdim-da yangi rejalar,
+Berdim-da va’dalar tog’dayin tizib.
+Ishondi, qo’lladi, necha – nechalar,
+Qo’limdan kelishin, ko’zimdan sezib.
+Lekin qalb ko’zlarim, ishonsa zora.
 
-from plotly.subplots import make_subplots
-import plotly.graph_objects as go
+Ularni bajarish shuncha qiyinmi? 
+Dedim – “to’xtash menga oxirgi yechim”!
+Yangi yil, gaplarim endi tiyinmi?
+O’zimning to’xtagim kelmoqda nechun?
+Kelyapsan, ishonchim yo’qdir tobora.     
 
-# Get unique branches
-branches = kp_df['Branch'].unique()
+Kalendar sen bilan boshlansa nima?
+Boshlashim kerakmi Sen-la rejalar,
+Shundan jahlim chiqib, birinchi kunni,
+Unutdim, harna-da, bir kun tejalar.
+Odatlarim aytdi, boshqa yo’q chora.
 
-# Create subplots
-fig = make_subplots(
-    rows=len(branches),
-    cols=1,
-    subplot_titles=[f"Branch: {branch}" for branch in branches],
-    vertical_spacing=0.02,
-    shared_xaxes=True,
-    specs=[[{"secondary_y": True}] for _ in range(len(branches))],
-)
+Rejamga vafoni so’raganlarga,
+Go’zal baxonalar saf tortdi qator.
+Hammani aldadim, ishontirdim-u,
+Chin dildan aytsam ham, vajlarni takror,
+Vijdonni aldolmay, bo’ldim ovora!
 
-# Add bar and line traces for each branch
-for i, branch in enumerate(branches, start=1):
-    # Filter data for the current branch
-    kp_branch = kp_df[kp_df['Branch'] == branch]
-    dolya_branch = dolya_df[dolya_df['Branch'] == branch]
-
-    # Add bar trace for КП (left y-axis)
-    fig.add_trace(
-        go.Bar(
-            x=kp_branch['Date'],
-            y=kp_branch['Value'],
-            name='КП',
-            text=kp_branch['Value'].round(2),
-            textposition='auto',
-            hovertemplate='Date: %{x}<br>КП: %{y:.2f}<extra></extra>',
-        ),
-        row=i,
-        col=1,
-        secondary_y=False,
-    )
-
-    # Add line trace for Доля,% (right y-axis)
-    fig.add_trace(
-        go.Scatter(
-            x=dolya_branch['Date'],
-            y=dolya_branch['Value'],
-            name='Доля,%',
-            mode='lines+markers+text',
-            text=dolya_branch['Value'].round(4),
-            textposition='top center',
-            hovertemplate='Date: %{x}<br>Доля,%: %{y:.4f}<extra></extra>',
-            line=dict(color='red', width=2),
-        ),
-        row=i,
-        col=1,
-        secondary_y=True,
-    )
-
-# Update layout
-fig.update_layout(
-    title_text='КП (Bars, Left Y-Axis) and Доля,% (Line, Right Y-Axis) by Branch Over Time',
-    height=200 * len(branches),
-    showlegend=True,
-    hovermode='x unified',
-    margin=dict(l=50, r=50, b=50, t=100, pad=4),
-)
-
-# Update y-axis titles
-for i in range(1, len(branches) + 1):
-    fig.update_yaxes(title_text='КП Value', row=i, col=1, secondary_y=False)
-    fig.update_yaxes(title_text='Доля,%', row=i, col=1, secondary_y=True)
-
-fig.show()
+Yangi yil, tuzdim-da yangi rejalar.
+Lekin qalb ko’zlarim ishonsa zora.
