@@ -1,72 +1,67 @@
-import pandas as pd
-import glob
-import openpyxl
+import polars as pl
+from datetime import date
 
-def process_and_merge_excels():
-    excel_files = glob.glob("*.xlsx") + glob.glob("*.xls")
-    if not excel_files:
-        print("No Excel files found.")
-        return
-    
-    all_dfs = []
+# Load your data (example)
+df = pl.from_pandas(df_deal_asosiy)
 
-    for file_path in excel_files:
-        print(f"Processing file: {file_path}")
+# Ensure date types
+df = df.with_columns([
+    pl.col("valuedate").cast(pl.Date),
+    pl.col("tilldate").cast(pl.Date),
+])
 
-        # Get sheet names safely
-        try:
-            wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
-            sheet_names = wb.sheetnames
-        except Exception as e:
-            print(f"Cannot open {file_path}: {e}")
-            continue
+# Replace 3500-01-01
+df = df.with_columns(
+    pl.when(pl.col("tilldate") == pl.date(3500,1,1))
+      .then(pl.date(2026,1,1))
+      .otherwise(pl.col("tilldate"))
+      .alias("tilldate")
+)
 
-        for sheet_name in sheet_names:
-            print(f"  -> Reading sheet '{sheet_name}'")
+# Global limits
+START = pl.date(2020,1,1)
+END   = pl.date(2025,12,1)
 
-            try:
-                # ❗ Read only A1:B85 — this is the KEY FIX
-                df = pd.read_excel(
-                    file_path,
-                    sheet_name=sheet_name,
-                    usecols="A:B",
-                    header=None,
-                    engine="openpyxl",
-                    nrows=85     # <--- LIMIT ROWS
-                )
-            except Exception as e:
-                print(f"     !! Sheet read error: {e}")
-                continue
+# Clamp intervals to [2020-01-01, 2026-01-01]
+df = df.with_columns([
+    pl.max_horizontal("valuedate", START).alias("v"),
+    pl.min_horizontal("tilldate", pl.date(2026,1,1)).alias("t")
+])
 
-            # Remove rows that are completely empty (optional)
-            # df = df.dropna(how="all")
+# Drop rows fully outside
+df = df.filter(pl.col("v") < pl.col("t"))
 
-            if df.empty:
-                print(f"     -> Empty sheet, skipping.")
-                continue
+# Generate month starts per row
+df = df.with_columns(
+    pl.date_range(
+        pl.col("v").dt.truncate("1mo"),
+        pl.col("t").dt.truncate("1mo"),
+        interval="1mo",
+        eager=False
+    ).alias("month")
+).explode("month")
 
-            # Extract company name from merged cells row 1
-            company_name = df.iloc[0].dropna().iloc[0]
+# Compute days
+df = df.with_columns(
+    pl.when(pl.col("month") < pl.col("valuedate"))
+      .then(0)
+      .when(pl.col("month") > pl.col("tilldate"))
+      .then((pl.col("tilldate") - pl.col("valuedate")).dt.total_days())
+      .otherwise((pl.col("month") - pl.col("valuedate")).dt.total_days())
+      .alias("days")
+)
 
-            # Actual data begins from row 2 to row 85
-            df = df.iloc[1:].copy()
+# Group: take max per dealid per month
+agg = df.group_by(["dealid", "month"]).agg(
+    pl.col("days").max()
+)
 
-            df.rename(columns={df.columns[0]: "Category"}, inplace=True)
-            df.rename(columns={df.columns[1]: company_name}, inplace=True)
+# Pivot to wide
+final = agg.pivot(
+    values="days",
+    index="dealid",
+    columns="month"
+).fill_null(0)
 
-            all_dfs.append(df)
-
-    if not all_dfs:
-        print("No data collected.")
-        return
-
-    print("Merging all DataFrames...")
-
-    merged = all_dfs[0]
-    for df in all_dfs[1:]:
-        merged = merged.merge(df, on="Category", how="outer")
-
-    print("Done. Shape:", merged.shape)
-    print(merged.head())
-
-    return merged
+# Convert to pandas if needed
+final_pandas = final.to_pandas()
