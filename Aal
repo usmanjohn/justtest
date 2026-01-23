@@ -1,5 +1,3 @@
-
-
 import polars as pl
 
 df = pl.from_pandas(df_deal_asosiy)
@@ -18,17 +16,17 @@ df = df.with_columns(
       .alias("tilldate")
 )
 
-# Global limits
+# Global window
 START = pl.date(2020,1,1)
 END   = pl.date(2025,12,31)
 
-# Clamp each interval to global window
+# Clamp
 df = df.with_columns([
     pl.max_horizontal("valuedate", START).alias("v"),
     pl.min_horizontal("tilldate", pl.date(2026,1,1)).alias("t")
 ]).filter(pl.col("v") < pl.col("t"))
 
-# Generate months PER INTERVAL (not per deal)
+# Generate months per interval
 df = df.with_columns(
     pl.date_ranges(
         pl.col("v").dt.truncate("1mo"),
@@ -37,17 +35,22 @@ df = df.with_columns(
     ).alias("month")
 ).explode("month")
 
-# Compute days correctly per interval
+# 🔥 SHIFT MONTH LABEL BY +1 MONTH (this is the key fix)
 df = df.with_columns(
-    (
-        pl.min_horizontal(pl.col("month"), pl.col("tilldate")) 
-        - pl.col("valuedate")
-    ).dt.total_days()
-    .clip(lower_bound=0)
-    .alias("days")
+    pl.col("month").dt.offset_by("1mo").alias("month")
 )
 
-# Now take MAX per dealid + month
+# Compute days with YOUR original logic
+df = df.with_columns(
+    pl.when(pl.col("month") < pl.col("valuedate").dt.offset_by("1mo"))
+      .then(0)
+      .when(pl.col("month") >= pl.col("tilldate").dt.offset_by("1mo"))
+      .then((pl.col("tilldate") - pl.col("valuedate")).dt.total_days())
+      .otherwise((pl.col("month").dt.offset_by("-1mo") - pl.col("valuedate")).dt.total_days())
+      .alias("days")
+)
+
+# Aggregate
 agg = df.group_by(["dealid", "month"]).agg(
     pl.col("days").max()
 )
