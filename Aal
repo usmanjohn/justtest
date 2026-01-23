@@ -1,2 +1,62 @@
-https://challenge.hennge.com/challenge-details/eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOlsiYWJkdXJhaW1vdnVzbWFuam9uQGdtYWlsLmNvbSJdLCJpc3MiOiJoZW5uZ2UtYWRtaXNzaW9uLWNoYWxsZW5nZSIsInN1YiI6ImNoYWxsZW5nZSJ9.L-67xfcsNij4uc2l6sTtj78QWSZLclv4hqokD3Zuq-0
-https://challenge.hennge.com/challenge-details/eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOlsiYmFja3BhY2tlcjAyMjBAZ21haWwuY29tIl0sImlzcyI6Imhlbm5nZS1hZG1pc3Npb24tY2hhbGxlbmdlIiwic3ViIjoiY2hhbGxlbmdlIn0.HOvLztk7cEjfK47M08Vy9LKdptQpFw3tnaI31GIoVyM
+
+
+import polars as pl
+
+df = pl.from_pandas(df_deal_asosiy)
+
+# Ensure date types
+df = df.with_columns([
+    pl.col("valuedate").cast(pl.Date),
+    pl.col("tilldate").cast(pl.Date),
+])
+
+# Replace 3500-01-01 with 2026-01-01
+df = df.with_columns(
+    pl.when(pl.col("tilldate") == pl.date(3500,1,1))
+      .then(pl.date(2026,1,1))
+      .otherwise(pl.col("tilldate"))
+      .alias("tilldate")
+)
+
+# Global limits
+START = pl.date(2020,1,1)
+END   = pl.date(2025,12,31)
+
+# Clamp each interval to global window
+df = df.with_columns([
+    pl.max_horizontal("valuedate", START).alias("v"),
+    pl.min_horizontal("tilldate", pl.date(2026,1,1)).alias("t")
+]).filter(pl.col("v") < pl.col("t"))
+
+# Generate months PER INTERVAL (not per deal)
+df = df.with_columns(
+    pl.date_ranges(
+        pl.col("v").dt.truncate("1mo"),
+        pl.col("t").dt.truncate("1mo"),
+        interval="1mo"
+    ).alias("month")
+).explode("month")
+
+# Compute days correctly per interval
+df = df.with_columns(
+    (
+        pl.min_horizontal(pl.col("month"), pl.col("tilldate")) 
+        - pl.col("valuedate")
+    ).dt.total_days()
+    .clip(lower_bound=0)
+    .alias("days")
+)
+
+# Now take MAX per dealid + month
+agg = df.group_by(["dealid", "month"]).agg(
+    pl.col("days").max()
+)
+
+# Pivot
+final = agg.pivot(
+    values="days",
+    index="dealid",
+    columns="month"
+).fill_null(0)
+
+final_pandas = final.to_pandas()
