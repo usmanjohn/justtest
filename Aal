@@ -8,7 +8,7 @@ df = df.with_columns([
     pl.col("tilldate").cast(pl.Date),
 ])
 
-# Replace 3500-01-01 with 2026-01-01
+# Replace 3500-01-01
 df = df.with_columns(
     pl.when(pl.col("tilldate") == pl.date(3500,1,1))
       .then(pl.date(2026,1,1))
@@ -16,50 +16,41 @@ df = df.with_columns(
       .alias("tilldate")
 )
 
-# Global window
-START = pl.date(2020,1,1)
-END   = pl.date(2025,12,31)
+# Reporting months (2020-01-01 ... 2026-01-01)
+months = pl.date_range(pl.date(2020,1,1), pl.date(2026,1,1), interval="1mo", eager=True)
 
-# Clamp
-df = df.with_columns([
-    pl.max_horizontal("valuedate", START).alias("v"),
-    pl.min_horizontal("tilldate", pl.date(2026,1,1)).alias("t")
-]).filter(pl.col("v") < pl.col("t"))
+# Cross join with months (still OK: 10M × 72 = 720M rows, but Polars can stream-group)
+df = df.with_columns(pl.lit(1).alias("k")).join(
+    pl.DataFrame({"month": months}).with_columns(pl.lit(1).alias("k")),
+    on="k",
+    how="inner"
+).drop("k")
 
-# Generate months per interval
+# prev month
 df = df.with_columns(
-    pl.date_ranges(
-        pl.col("v").dt.truncate("1mo"),
-        pl.col("t").dt.truncate("1mo"),
-        interval="1mo"
-    ).alias("month")
-).explode("month")
-
-# 🔥 SHIFT MONTH LABEL BY +1 MONTH (this is the key fix)
-df = df.with_columns(
-    pl.col("month").dt.offset_by("1mo").alias("month")
+    pl.col("month").dt.offset_by("-1mo").alias("pm")
 )
 
-# Compute days with YOUR original logic
+# Compute days EXACTLY as simulated
 df = df.with_columns(
-    pl.when(pl.col("month") < pl.col("valuedate").dt.offset_by("1mo"))
+    pl.when(pl.col("pm") < pl.col("valuedate"))
       .then(0)
-      .when(pl.col("month") >= pl.col("tilldate").dt.offset_by("1mo"))
+      .when(pl.col("pm") >= pl.col("tilldate"))
       .then((pl.col("tilldate") - pl.col("valuedate")).dt.total_days())
-      .otherwise((pl.col("month").dt.offset_by("-1mo") - pl.col("valuedate")).dt.total_days())
+      .otherwise((pl.col("pm") - pl.col("valuedate")).dt.total_days())
       .alias("days")
 )
 
-# Aggregate
-agg = df.group_by(["dealid", "month"]).agg(
+# Group & max
+agg = df.group_by(["dealid","month"]).agg(
     pl.col("days").max()
 )
 
 # Pivot
 final = agg.pivot(
-    values="days",
     index="dealid",
-    columns="month"
+    columns="month",
+    values="days"
 ).fill_null(0)
 
 final_pandas = final.to_pandas()
